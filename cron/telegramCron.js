@@ -1,21 +1,170 @@
 const cron = require('node-cron');
-const axios = require('axios');
+const { Telegraf } = require('telegraf');
+const mongoose = require('mongoose');
 const DailyLog = require('../models/DailyLog');
 const Loan = require('../models/Loan');
 const Member = require('../models/Member');
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
-const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`;
+const VERCEL_URL = process.env.VERCEL_URL || process.env.VERCEL_BRANCH_URL;
+
+let bot = null;
+
+function getBot() {
+  if (!TELEGRAM_BOT_TOKEN) return null;
+  if (!bot) {
+    bot = new Telegraf(TELEGRAM_BOT_TOKEN);
+
+    // /start command — show bot connectivity status
+    bot.start(async (ctx) => {
+      const dbState = mongoose.connection.readyState;
+      const dbStatus = { 0: 'Disconnected', 1: 'Connected', 2: 'Connecting', 3: 'Disconnecting' };
+      const dbOk = dbState === 1;
+
+      let apiOk = true;
+      try {
+        const axios = require('axios');
+        const baseUrl = VERCEL_URL
+          ? `https://${VERCEL_URL}`
+          : 'http://localhost:' + (process.env.PORT || 5000);
+        await axios.get(`${baseUrl}/api/health`, { timeout: 5000 });
+      } catch (e) { apiOk = false; }
+
+      const membersCount = dbOk ? await Member.countDocuments() : '?';
+      const loansActive = dbOk ? await Loan.countDocuments({ status: 'active' }) : '?';
+
+      const status = [
+        '<b>TMSS Field Supervisor Bot</b>',
+        '',
+        '<b>System Status:</b>',
+        `  Database: ${dbOk ? 'Connected ' : 'Disconnected '}` + (dbOk ? '' : ''),
+        `  API Server: ${apiOk ? 'Online ' : 'Offline '}`,
+        '',
+        `<b>Stats:</b>`,
+        `  Members: ${membersCount}`,
+        `  Active Loans: ${loansActive}`,
+        '',
+        dbOk && apiOk
+          ? 'All systems operational.'
+          : '<b>Warning:</b> Some systems are down. Check Vercel logs.'
+      ].join('\n');
+
+      ctx.replyWithHTML(status);
+      console.log(`/start command from chat ${ctx.chat.id}`);
+    });
+
+    // /status command — detailed status
+    bot.command('status', async (ctx) => {
+      const dbState = mongoose.connection.readyState;
+      const states = ['Disconnected', 'Connected', 'Connecting', 'Disconnecting'];
+
+      let healthOk = false;
+      try {
+        const axios = require('axios');
+        const baseUrl = VERCEL_URL
+          ? `https://${VERCEL_URL}`
+          : 'http://localhost:' + (process.env.PORT || 5000);
+        const { data } = await axios.get(`${baseUrl}/api/health`, { timeout: 5000 });
+        healthOk = data.status === 'ok';
+      } catch (e) {}
+
+      const today = new Date().toISOString().split('T')[0];
+      const todayLog = dbOk === 1 ? await DailyLog.findOne({
+        date: {
+          $gte: new Date(today),
+          $lt: new Date(new Date(today).getTime() + 86400000)
+        }
+      }) : null;
+
+      const msg = [
+        '<b>Detailed Status</b>',
+        '',
+        '<b>Connections:</b>',
+        `  MongoDB: ${states[dbState]} (state ${dbState})`,
+        `  Health API: ${healthOk ? 'OK' : 'FAIL'}`,
+        `  Environment: ${process.env.NODE_ENV || 'development'}`,
+        '',
+        `<b>Today (${today}):</b>`,
+        `  Log exists: ${todayLog ? 'Yes' : 'No'}`,
+        todayLog ? `  Collection: ৳${(todayLog.totalCollection || 0).toLocaleString()}` : '',
+        todayLog ? `  KM: ${todayLog.totalKmTraveled || 0}` : '',
+        todayLog ? `  Report sent: ${todayLog.telegramReportSent ? 'Yes' : 'No'}` : '',
+        '',
+        `<b>Bot:</b>`,
+        `  Chat ID: ${ctx.chat.id}`,
+        `  Webhook: ${VERCEL_URL ? `https://${VERCEL_URL}/api/telegram-webhook` : 'polling (local)'}`
+      ].filter(Boolean).join('\n');
+
+      ctx.replyWithHTML(msg);
+    });
+
+    // /help command
+    bot.command('help', (ctx) => {
+      ctx.replyWithHTML(
+        '<b>Available Commands:</b>\n\n' +
+        '/start — Bot status & connectivity check\n' +
+        '/status — Detailed system status\n' +
+        '/help — Show this help\n\n' +
+        '<i>The bot also sends a daily report at 11:59 PM Bangladesh time.</i>'
+      );
+    });
+
+    bot.catch((err, ctx) => {
+      console.error('Telegram bot error:', err.message);
+      ctx.reply('An error occurred. Check server logs.').catch(() => {});
+    });
+  }
+  return bot;
+}
+
+// Set webhook for Vercel, or use polling for local
+async function initBot() {
+  const b = getBot();
+  if (!b) {
+    console.warn('No TELEGRAM_BOT_TOKEN set — bot features disabled');
+    return;
+  }
+
+  if (VERCEL_URL) {
+    const webhookUrl = `https://${VERCEL_URL}/api/telegram-webhook`;
+    try {
+      await b.telegram.setWebhook(webhookUrl);
+      console.log(`Telegram webhook set to: ${webhookUrl}`);
+    } catch (err) {
+      console.error('Failed to set webhook:', err.message);
+    }
+  } else {
+    // Local development — use polling
+    b.launch();
+    console.log('Telegram bot started in polling mode');
+  }
+}
+
+// Webhook handler for Vercel
+async function handleWebhook(req, res) {
+  const b = getBot();
+  if (!b) return res.status(500).json({ error: 'Bot not configured' });
+  try {
+    await b.handleUpdate(req.body);
+    res.status(200).json({ ok: true });
+  } catch (err) {
+    console.error('Webhook error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+}
+
+// ====== Existing send & cron ======
 
 async function sendTelegramMessage(text) {
+  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
+    console.log('Telegram not configured — skipping message');
+    return;
+  }
+  const b = getBot();
   try {
-    await axios.post(`${TELEGRAM_API}/sendMessage`, {
-      chat_id: TELEGRAM_CHAT_ID,
-      text,
-      parse_mode: 'HTML'
-    });
-    console.log('Telegram report sent successfully');
+    await b.telegram.sendMessage(TELEGRAM_CHAT_ID, text, { parse_mode: 'HTML' });
+    console.log('Telegram message sent');
   } catch (err) {
     console.error('Telegram send failed:', err.response?.data || err.message);
   }
@@ -52,7 +201,6 @@ async function generateDailyReport() {
   const pers = dailyLog.personalLedger || {};
   const route = dailyLog.dailyRoute || {};
 
-  // Next day's tentative plan: find installments due tomorrow
   const dueTomorrowLoans = await Loan.find({
     status: 'active',
     'installments.dueDate': {
@@ -135,7 +283,6 @@ async function generateDailyReport() {
 }
 
 function startTelegramCron() {
-  // Run at 11:59 PM Bangladesh time (UTC+6 = 17:59 UTC)
   cron.schedule('59 17 * * *', async () => {
     console.log('Running Telegram daily report cron...');
     try {
@@ -151,9 +298,15 @@ function startTelegramCron() {
   console.log('Telegram cron job scheduled for 11:59 PM daily (Asia/Dhaka)');
 }
 
-// export for manual trigger via API if needed
 async function manualReport() {
   await generateDailyReport();
 }
 
-module.exports = { startTelegramCron, manualReport, sendTelegramMessage };
+module.exports = {
+  startTelegramCron,
+  manualReport,
+  sendTelegramMessage,
+  getBot,
+  initBot,
+  handleWebhook
+};

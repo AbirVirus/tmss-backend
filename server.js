@@ -2,9 +2,8 @@ require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
-const { startTelegramCron } = require('./cron/telegramCron');
+const { startTelegramCron, initBot, handleWebhook, sendTelegramMessage } = require('./cron/telegramCron');
 
-// Routes (আপনার কোড অনুযায়ী)
 const locationRoutes = require('./routes/locations');
 const memberRoutes = require('./routes/members');
 const loanRoutes = require('./routes/loans');
@@ -19,9 +18,12 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
-// Vercel-এ স্ট্যাটিক ফাইল সার্ভ করার দরকার নেই কারণ ফ্রন্টএন্ড আলাদাভাবে ডেপ্লয় হয়েছে। 
-// তাই স্ট্যাটিক এবং '*' রাউটগুলো সরিয়ে দেওয়া হয়েছে।
+// Telegram webhook — raw body needed for telegraf
+app.post('/api/telegram-webhook', express.json(), (req, res) => {
+  handleWebhook(req, res);
+});
 
+// API routes
 app.use('/api/locations', locationRoutes);
 app.use('/api/members', memberRoutes);
 app.use('/api/loans', loanRoutes);
@@ -31,25 +33,75 @@ app.use('/api/routes', routeRoutes);
 app.use('/api/daily-logs', dailyLogRoutes);
 app.use('/api/sync', syncRoutes);
 
+// Health check
 app.get('/api/health', (req, res) => res.json({ status: 'ok', timestamp: new Date() }));
+
+// Full system status
+app.get('/api/status', async (req, res) => {
+  const dbState = mongoose.connection.readyState;
+  const states = { 0: 'disconnected', 1: 'connected', 2: 'connecting', 3: 'disconnecting' };
+
+  let memberCount = 0, loanCount = 0, todayLog = null;
+  if (dbState === 1) {
+    try {
+      memberCount = await require('./models/Member').countDocuments();
+      loanCount = await require('./models/Loan').countDocuments();
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const tomorrow = new Date(today.getTime() + 86400000);
+      todayLog = await require('./models/DailyLog').findOne({
+        date: { $gte: today, $lt: tomorrow }
+      });
+    } catch (e) {}
+  }
+
+  res.json({
+    status: dbState === 1 ? 'healthy' : 'degraded',
+    timestamp: new Date().toISOString(),
+    database: {
+      status: states[dbState],
+      connected: dbState === 1
+    },
+    telegram: {
+      tokenConfigured: !!process.env.TELEGRAM_BOT_TOKEN,
+      chatIdConfigured: !!process.env.TELEGRAM_CHAT_ID,
+      vercelUrl: process.env.VERCEL_URL || null
+    },
+    stats: {
+      members: memberCount,
+      loans: loanCount,
+      todayLogExists: !!todayLog,
+      todayCollection: todayLog?.totalCollection || 0,
+      todayKm: todayLog?.totalKmTraveled || 0,
+      reportSent: todayLog?.telegramReportSent || false
+    },
+    environment: process.env.NODE_ENV || 'development'
+  });
+});
 
 const PORT = process.env.PORT || 5000;
 
-// MongoDB কানেকশন এবং অ্যাপ এক্সপোর্ট
 mongoose.connect(process.env.MONGO_URI)
-  .then(() => {
+  .then(async () => {
     console.log('MongoDB connected');
-    // Vercel-এর জন্য app.listen সরাসরি দরকার নেই, তবে লোকাল টেস্টের জন্য এটি রাখা হয়েছে
+
+    // Init Telegram bot (webhook on Vercel, polling locally)
+    try {
+      await initBot();
+      startTelegramCron();
+    } catch (err) {
+      console.error('Telegram init error:', err.message);
+    }
+
     if (process.env.NODE_ENV !== 'production') {
       app.listen(PORT, () => {
         console.log(`Server running on port ${PORT}`);
       });
     }
-    // Cron Job স্টার্ট করা
-    startTelegramCron();
   })
   .catch(err => {
     console.error('MongoDB connection error:', err.message);
   });
 
-module.exports = app; // Vercel-এর জন্য এটি আবশ্যিক
+// Vercel requires the export
+module.exports = app;
