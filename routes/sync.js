@@ -5,5 +5,6 @@ router.post('/push', ctrl.push);
 router.get('/pull', ctrl.pull);
 router.get('/status', ctrl.status);
 router.post('/process', ctrl.manualProcess);
+router.post('/retry-failed', ctrl.retryFailed);
 
 module.exports = router;

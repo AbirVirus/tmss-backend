@@ -15,6 +15,11 @@ const modelMap = {
   dailylogs: DailyLog
 };
 
+function getModel(collectionName) {
+  const key = collectionName.toLowerCase();
+  return modelMap[key] || null;
+}
+
 exports.push = async (req, res) => {
   const { operations } = req.body;
   const results = { success: [], failed: [] };
@@ -34,7 +39,6 @@ exports.push = async (req, res) => {
     }
   }
 
-  // Process immediately
   await processQueue();
   res.json(results);
 };
@@ -45,7 +49,7 @@ exports.pull = async (req, res) => {
   const data = {};
 
   for (const col of (collections || 'members,loans').split(',')) {
-    const Model = modelMap[col];
+    const Model = getModel(col);
     if (Model) {
       data[col] = await Model.find({ updatedAt: { $gt: sinceDate } }).limit(1000);
     }
@@ -71,7 +75,7 @@ async function processQueue() {
     await item.save();
 
     try {
-      const Model = modelMap[item.collectionName];
+      const Model = getModel(item.collectionName);
       if (!Model) throw new Error(`Unknown collection: ${item.collectionName}`);
 
       switch (item.operation) {
@@ -100,4 +104,12 @@ exports.manualProcess = async (req, res) => {
   await processQueue();
   const status = await SyncQueue.find({}).sort({ createdAt: -1 }).limit(20);
   res.json(status);
+};
+
+exports.retryFailed = async (req, res) => {
+  const count = await SyncQueue.countDocuments({ status: 'failed' });
+  await SyncQueue.updateMany({ status: 'failed' }, { $set: { status: 'queued' } });
+  await processQueue();
+  const remaining = await SyncQueue.countDocuments({ status: 'failed' });
+  res.json({ retried: count, stillFailed: remaining });
 };
