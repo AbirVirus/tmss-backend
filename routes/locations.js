@@ -9,5 +9,6 @@ router.get('/villages', ctrl.getVillages);
 router.get('/paras', ctrl.getParas);
 router.get('/search', ctrl.searchLocations);
 router.post('/seed', ctrl.seedLocations);
+router.post('/seed-bulk', ctrl.bulkSeed);
 
 module.exports = router;

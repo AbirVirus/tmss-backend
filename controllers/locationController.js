@@ -1,5 +1,39 @@
 const Location = require('../models/Location');
 
+// Bulk seed using insertMany for speed
+exports.bulkSeed = async (req, res) => {
+  const locations = req.body;
+  if (!Array.isArray(locations) || locations.length === 0) {
+    return res.status(400).json({ error: 'Provide an array of location objects' });
+  }
+  try {
+    const result = await Location.bulkWrite(
+      locations.map(loc => ({
+        updateOne: {
+          filter: {
+            division: loc.division,
+            district: loc.district,
+            upazila: loc.upazila,
+            union: loc.union,
+            village: loc.village,
+            para: loc.para
+          },
+          update: { $setOnInsert: loc },
+          upsert: true
+        }
+      })),
+      { ordered: false }
+    );
+    res.json({
+      inserted: result.upsertedCount || 0,
+      matched: result.matchedCount || 0,
+      total: locations.length
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
 exports.getDivisions = async (req, res) => {
   const divisions = await Location.distinct('division');
   res.json(divisions.sort());
