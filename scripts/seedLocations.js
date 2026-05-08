@@ -16,7 +16,7 @@
  *   2. Place it at backend/data/bangladesh-districts.json (or similar)
  *   3. Run: node scripts/seedLocations.js
  */
-require('dotenv').config({ path: '../.env' });
+require('dotenv').config();
 const mongoose = require('mongoose');
 const fs = require('fs');
 const path = require('path');
