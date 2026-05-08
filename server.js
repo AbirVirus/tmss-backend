@@ -88,25 +88,31 @@ const PORT = process.env.PORT || 5000;
 // Start Telegram bot immediately — doesn't need database
 initBot().catch(err => console.error('Telegram init error:', err.message));
 
-mongoose.connect(process.env.MONGO_URI, {
-  serverSelectionTimeoutMS: 10000,
-  connectTimeoutMS: 10000
-})
-  .then(async () => {
-    console.log('MongoDB connected');
-    dbError = null;
-    startTelegramCron();
-
-    if (process.env.NODE_ENV !== 'production') {
-      app.listen(PORT, () => {
-        console.log(`Server running on port ${PORT}`);
-      });
-    }
+// Connect to MongoDB — reuse existing connection on warm starts
+if (mongoose.connection.readyState === 0) {
+  mongoose.connect(process.env.MONGO_URI, {
+    serverSelectionTimeoutMS: 5000,
+    connectTimeoutMS: 5000
   })
-  .catch(err => {
-    console.error('MongoDB connection error:', err.message);
-    dbError = err.message;
+    .then(() => {
+      console.log('MongoDB connected');
+      dbError = null;
+      startTelegramCron();
+    })
+    .catch(err => {
+      console.error('MongoDB connection error:', err.message);
+      dbError = err.message;
+    });
+} else {
+  console.log('MongoDB already connected (warm start)');
+}
+
+if (process.env.NODE_ENV !== 'production') {
+  const PORT = process.env.PORT || 5000;
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
   });
+}
 
 // Vercel requires the export
 module.exports = app;
