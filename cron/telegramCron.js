@@ -20,6 +20,7 @@ function getBot() {
 
     // /start command — show bot connectivity status
     bot.start(async (ctx) => {
+      const userName = ctx.from.first_name || 'User';
       const dbState = mongoose.connection.readyState;
       const dbStates = { 0: 'Disconnected', 1: 'Connected', 2: 'Connecting', 3: 'Disconnecting' };
 
@@ -57,10 +58,12 @@ function getBot() {
       }
 
       const status = [
+        `<b>Hello ${userName}!</b>`,
+        '',
         '<b>TMSS Field Supervisor Bot</b>',
         '',
         '<b>System Status:</b>',
-        `  Database: ${dbLabel} ${dbOk ? '✅' : dbState === 2 ? '⏳' : '❌'}`,
+        `  Database: ${dbLabel} ${dbOk ? '✅' : finalState === 2 ? '⏳' : '❌'}`,
         `  API Server: ${apiOk ? 'Online ✅' : 'Offline ❌'}`,
         '',
         `<b>Stats:</b>`,
@@ -73,11 +76,12 @@ function getBot() {
       ].join('\n');
 
       ctx.replyWithHTML(status);
-      console.log(`/start command from chat ${ctx.chat.id}`);
+      console.log(`/start command from ${userName} (chat ${ctx.chat.id})`);
     });
 
     // /status command — detailed status
     bot.command('status', async (ctx) => {
+      const userName = ctx.from.first_name || 'User';
       const dbState = mongoose.connection.readyState;
       const states = ['Disconnected', 'Connected', 'Connecting', 'Disconnecting'];
 
@@ -119,6 +123,8 @@ function getBot() {
       }
 
       const msg = [
+        `<b>Hello ${userName}!</b>`,
+        '',
         '<b>Detailed Status</b>',
         '',
         '<b>Connections:</b>',
@@ -142,7 +148,9 @@ function getBot() {
 
     // /help command
     bot.command('help', (ctx) => {
+      const userName = ctx.from.first_name || 'User';
       ctx.replyWithHTML(
+        `<b>Hello ${userName}!</b>\n\n` +
         '<b>Available Commands:</b>\n\n' +
         '/start — Bot status & connectivity check\n' +
         '/status — Detailed system status\n' +
@@ -197,14 +205,34 @@ async function handleWebhook(req, res) {
 
 // ====== Existing send & cron ======
 
-async function sendTelegramMessage(text) {
+let chatNameCache = null;
+
+async function getChatName() {
+  if (chatNameCache) return chatNameCache;
+  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return null;
+  const b = getBot();
+  try {
+    const chat = await b.telegram.getChat(TELEGRAM_CHAT_ID);
+    chatNameCache = chat.first_name || chat.title || null;
+    return chatNameCache;
+  } catch (e) {
+    return null;
+  }
+}
+
+async function sendTelegramMessage(text, includeGreeting = false) {
   if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
     console.log('Telegram not configured — skipping message');
     return;
   }
   const b = getBot();
   try {
-    await b.telegram.sendMessage(TELEGRAM_CHAT_ID, text, { parse_mode: 'HTML' });
+    let msg = text;
+    if (includeGreeting) {
+      const name = await getChatName();
+      if (name) msg = `<b>Hello ${name}!</b>\n\n${text}`;
+    }
+    await b.telegram.sendMessage(TELEGRAM_CHAT_ID, msg, { parse_mode: 'HTML' });
     console.log('Telegram message sent');
   } catch (err) {
     console.error('Telegram send failed:', err.response?.data || err.message);
@@ -233,7 +261,8 @@ async function generateDailyReport() {
   if (!dailyLog) {
     await sendTelegramMessage(
       `<b>TMSS Daily Report - ${today.toDateString()}</b>\n\n` +
-      'No daily log was recorded today.'
+      'No daily log was recorded today.',
+      true
     );
     return;
   }
@@ -317,7 +346,7 @@ async function generateDailyReport() {
     planSection
   ].join('\n');
 
-  await sendTelegramMessage(report);
+  await sendTelegramMessage(report, true);
 
   dailyLog.telegramReportSent = true;
   await dailyLog.save();
@@ -331,7 +360,8 @@ function startTelegramCron() {
     } catch (err) {
       console.error('Cron job error:', err);
       await sendTelegramMessage(
-        `<b>TMSS Report Error</b>\n\nFailed to generate daily report: ${err.message}`
+        `<b>TMSS Report Error</b>\n\nFailed to generate daily report: ${err.message}`,
+        true
       );
     }
   }, { timezone: 'Asia/Dhaka' });
