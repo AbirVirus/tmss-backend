@@ -13,6 +13,8 @@ const routeRoutes = require('./routes/routes');
 const dailyLogRoutes = require('./routes/dailyLogs');
 const syncRoutes = require('./routes/sync');
 
+let dbError = null;
+
 const app = express();
 
 app.use(cors());
@@ -60,7 +62,9 @@ app.get('/api/status', async (req, res) => {
     timestamp: new Date().toISOString(),
     database: {
       status: states[dbState],
-      connected: dbState === 1
+      connected: dbState === 1,
+      configured: !!process.env.MONGO_URI,
+      error: dbError
     },
     telegram: {
       tokenConfigured: !!process.env.TELEGRAM_BOT_TOKEN,
@@ -101,6 +105,7 @@ mongoose.connect(process.env.MONGO_URI)
   })
   .catch(err => {
     console.error('MongoDB connection error:', err.message);
+    dbError = err.message;
   });
 
 // Vercel requires the export
