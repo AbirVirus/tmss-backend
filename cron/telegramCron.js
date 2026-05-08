@@ -7,7 +7,9 @@ const Member = require('../models/Member');
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
-const VERCEL_URL = process.env.VERCEL_URL || process.env.VERCEL_BRANCH_URL;
+const VERCEL_URL = process.env.NODE_ENV === 'production'
+  ? 'tmss-backend.vercel.app'
+  : (process.env.VERCEL_URL || process.env.VERCEL_BRANCH_URL);
 
 let bot = null;
 
