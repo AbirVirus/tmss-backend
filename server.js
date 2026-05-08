@@ -88,24 +88,45 @@ const PORT = process.env.PORT || 5000;
 // Start Telegram bot immediately — doesn't need database
 initBot().catch(err => console.error('Telegram init error:', err.message));
 
-// Connect to MongoDB — reuse existing connection on warm starts
-if (mongoose.connection.readyState === 0) {
-  mongoose.connect(process.env.MONGO_URI, {
-    serverSelectionTimeoutMS: 5000,
-    connectTimeoutMS: 5000
-  })
-    .then(() => {
-      console.log('MongoDB connected');
-      dbError = null;
-      startTelegramCron();
+// Singleton MongoDB connection — prevents race conditions on serverless cold starts
+let connectionPromise = null;
+
+function connectDB() {
+  if (mongoose.connection.readyState === 1) return Promise.resolve();
+  if (!connectionPromise) {
+    connectionPromise = mongoose.connect(process.env.MONGO_URI, {
+      serverSelectionTimeoutMS: 5000,
+      connectTimeoutMS: 5000
     })
-    .catch(err => {
-      console.error('MongoDB connection error:', err.message);
-      dbError = err.message;
-    });
-} else {
-  console.log('MongoDB already connected (warm start)');
+      .then(() => {
+        console.log('MongoDB connected');
+        dbError = null;
+        startTelegramCron();
+      })
+      .catch(err => {
+        console.error('MongoDB connection error:', err.message);
+        dbError = err.message;
+        connectionPromise = null; // reset so next request can retry
+        throw err;
+      });
+  }
+  return connectionPromise;
 }
+
+connectDB();
+
+// Middleware: wait for MongoDB before processing API routes
+app.use('/api', async (req, res, next) => {
+  if (req.path === '/health' || req.path === '/status' || req.path === '/telegram-webhook') {
+    return next();
+  }
+  try {
+    await connectDB();
+    next();
+  } catch (err) {
+    res.status(503).json({ error: 'Database unavailable', detail: err.message });
+  }
+});
 
 if (process.env.NODE_ENV !== 'production') {
   const PORT = process.env.PORT || 5000;
