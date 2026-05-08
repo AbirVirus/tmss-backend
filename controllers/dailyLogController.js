@@ -2,6 +2,7 @@ const DailyLog = require('../models/DailyLog');
 const CompanyLedger = require('../models/CompanyLedger');
 const PersonalLedger = require('../models/PersonalLedger');
 const DailyRoute = require('../models/DailyRoute');
+const { manualReport } = require('../cron/telegramCron');
 
 exports.getByDate = async (req, res) => {
   const { date, supervisorId } = req.query;
@@ -76,4 +77,13 @@ exports.getMonthlyReport = async (req, res) => {
   };
 
   res.json({ summary, logs });
+};
+
+exports.sendReport = async (req, res) => {
+  try {
+    await manualReport();
+    res.json({ success: true, message: 'Report sent via Telegram' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 };

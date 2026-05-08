@@ -97,11 +97,16 @@ exports.recordPayment = async (req, res) => {
   res.json(loan);
 };
 
+function bdToday() {
+  const now = new Date();
+  const bd = new Date(now.getTime() + 6 * 3600000);
+  bd.setUTCHours(0, 0, 0, 0);
+  return bd;
+}
+
 exports.getDueToday = async (req, res) => {
-  const today = new Date();
-  today.setUTCHours(0, 0, 0, 0);
-  const tomorrow = new Date(today);
-  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+  const today = bdToday();
+  const tomorrow = new Date(today.getTime() + 86400000);
 
   const loans = await Loan.find({
     status: 'active',
@@ -112,11 +117,8 @@ exports.getDueToday = async (req, res) => {
 };
 
 exports.getDueTomorrow = async (req, res) => {
-  const tomorrow = new Date();
-  tomorrow.setUTCHours(0, 0, 0, 0);
-  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
-  const dayAfter = new Date(tomorrow);
-  dayAfter.setUTCDate(dayAfter.getUTCDate() + 1);
+  const tomorrow = new Date(bdToday().getTime() + 86400000);
+  const dayAfter = new Date(tomorrow.getTime() + 86400000);
 
   const loans = await Loan.find({
     status: 'active',
