@@ -21,8 +21,22 @@ function getBot() {
     // /start command — show bot connectivity status
     bot.start(async (ctx) => {
       const dbState = mongoose.connection.readyState;
-      const dbStatus = { 0: 'Disconnected', 1: 'Connected', 2: 'Connecting', 3: 'Disconnecting' };
-      const dbOk = dbState === 1;
+      const dbStates = { 0: 'Disconnected', 1: 'Connected', 2: 'Connecting', 3: 'Disconnecting' };
+
+      // Try waiting for connection if still connecting
+      if (dbState === 2) {
+        try {
+          await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => resolve('timeout'), 6000);
+            mongoose.connection.once('connected', () => { clearTimeout(timeout); resolve('ok'); });
+            mongoose.connection.once('error', () => { clearTimeout(timeout); reject(new Error('Connection failed')); });
+          });
+        } catch (e) {}
+      }
+
+      const finalState = mongoose.connection.readyState;
+      const dbOk = finalState === 1;
+      const dbLabel = dbStates[finalState] || 'Unknown';
 
       let apiOk = true;
       try {
@@ -33,23 +47,29 @@ function getBot() {
         await axios.get(`${baseUrl}/api/health`, { timeout: 5000 });
       } catch (e) { apiOk = false; }
 
-      const membersCount = dbOk ? await Member.countDocuments() : '?';
-      const loansActive = dbOk ? await Loan.countDocuments({ status: 'active' }) : '?';
+      let membersCount = '?';
+      let loansActive = '?';
+      if (dbOk) {
+        try {
+          membersCount = await Member.countDocuments();
+          loansActive = await Loan.countDocuments({ status: 'active' });
+        } catch (e) {}
+      }
 
       const status = [
         '<b>TMSS Field Supervisor Bot</b>',
         '',
         '<b>System Status:</b>',
-        `  Database: ${dbOk ? 'Connected ' : 'Disconnected '}` + (dbOk ? '' : ''),
-        `  API Server: ${apiOk ? 'Online ' : 'Offline '}`,
+        `  Database: ${dbLabel} ${dbOk ? '✅' : dbState === 2 ? '⏳' : '❌'}`,
+        `  API Server: ${apiOk ? 'Online ✅' : 'Offline ❌'}`,
         '',
         `<b>Stats:</b>`,
         `  Members: ${membersCount}`,
         `  Active Loans: ${loansActive}`,
         '',
         dbOk && apiOk
-          ? 'All systems operational.'
-          : '<b>Warning:</b> Some systems are down. Check Vercel logs.'
+          ? '✅ All systems operational.'
+          : '⚠️ <b>Warning:</b> Some systems are down. Check Vercel logs.'
       ].join('\n');
 
       ctx.replyWithHTML(status);
@@ -60,6 +80,20 @@ function getBot() {
     bot.command('status', async (ctx) => {
       const dbState = mongoose.connection.readyState;
       const states = ['Disconnected', 'Connected', 'Connecting', 'Disconnecting'];
+
+      // Try waiting for connection if still connecting
+      if (dbState === 2) {
+        try {
+          await new Promise((resolve) => {
+            const timeout = setTimeout(() => resolve(), 6000);
+            mongoose.connection.once('connected', () => { clearTimeout(timeout); resolve(); });
+            mongoose.connection.once('error', () => { clearTimeout(timeout); resolve(); });
+          });
+        } catch (e) {}
+      }
+
+      const finalState = mongoose.connection.readyState;
+      const dbOk = finalState === 1;
 
       let healthOk = false;
       try {
@@ -72,18 +106,23 @@ function getBot() {
       } catch (e) {}
 
       const today = new Date().toISOString().split('T')[0];
-      const todayLog = dbOk === 1 ? await DailyLog.findOne({
-        date: {
-          $gte: new Date(today),
-          $lt: new Date(new Date(today).getTime() + 86400000)
-        }
-      }) : null;
+      let todayLog = null;
+      if (dbOk) {
+        try {
+          todayLog = await DailyLog.findOne({
+            date: {
+              $gte: new Date(today),
+              $lt: new Date(new Date(today).getTime() + 86400000)
+            }
+          });
+        } catch (e) {}
+      }
 
       const msg = [
         '<b>Detailed Status</b>',
         '',
         '<b>Connections:</b>',
-        `  MongoDB: ${states[dbState]} (state ${dbState})`,
+        `  MongoDB: ${states[finalState]} (state ${finalState})`,
         `  Health API: ${healthOk ? 'OK' : 'FAIL'}`,
         `  Environment: ${process.env.NODE_ENV || 'development'}`,
         '',
