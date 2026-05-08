@@ -85,17 +85,17 @@ app.get('/api/status', async (req, res) => {
 
 const PORT = process.env.PORT || 5000;
 
-mongoose.connect(process.env.MONGO_URI)
+// Start Telegram bot immediately — doesn't need database
+initBot().catch(err => console.error('Telegram init error:', err.message));
+
+mongoose.connect(process.env.MONGO_URI, {
+  serverSelectionTimeoutMS: 10000,
+  connectTimeoutMS: 10000
+})
   .then(async () => {
     console.log('MongoDB connected');
-
-    // Init Telegram bot (webhook on Vercel, polling locally)
-    try {
-      await initBot();
-      startTelegramCron();
-    } catch (err) {
-      console.error('Telegram init error:', err.message);
-    }
+    dbError = null;
+    startTelegramCron();
 
     if (process.env.NODE_ENV !== 'production') {
       app.listen(PORT, () => {
