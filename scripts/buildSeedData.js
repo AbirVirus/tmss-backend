@@ -77,10 +77,9 @@ async function main() {
     });
   }
 
-  // Output as JSON array to stdout
-  console.log(JSON.stringify(locations));
-  console.error(`\nGenerated ${locations.length} location entries.`);
-  console.error('Pipe this to a file: node scripts/buildSeedData.js > data/bangladesh-seed.json');
+  // Output as JSON array to stdout ONLY
+  process.stdout.write(JSON.stringify(locations));
+  process.stderr.write(`\nGenerated ${locations.length} location entries.\n`);
 }
 
 main().catch(err => { console.error(err); process.exit(1); });
